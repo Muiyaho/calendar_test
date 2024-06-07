@@ -24,7 +24,7 @@ class CalendarApp:
         self.data_file = "calendar_events.json"
         self.load_events()
 
-        self.root.title("캘린더 프로그램")
+        self.root.title("캘린더")
         self.root.geometry("800x600")
         self.create_menu()
         self.create_header()
@@ -165,11 +165,15 @@ class CalendarApp:
     def show_context_menu(self, event, date, event_list):
         context_menu = Menu(self.root, tearoff=0)
         context_menu.add_command(label="일정 추가", command=lambda: self.open_add_event_popup(date))
-        if event_list.curselection() and event_list.get(event_list.curselection()):
+        if event_list.curselection() and event_list.get(event_list.curselection()) not in [self.holidays.get(date)]:
             context_menu.add_command(label="일정 삭제", command=lambda: self.delete_event(date, event_list))
         context_menu.post(event.x_root, event.y_root)
 
     def open_add_event_popup(self, event_date, event=None):
+        if event and event["title"] in self.holidays.values():
+            messagebox.showinfo("알림", "공휴일은 수정할 수 없습니다.")
+            return
+
         popup = Toplevel(self.root)
         popup.title("일정 추가" if event is None else "일정 보기")
         popup.geometry("380x250")
@@ -234,7 +238,7 @@ class CalendarApp:
             event_to_delete_title = event_list.get(selected_index)
             full_event = next((event for event in self.events[event_date] if event["title"] == event_to_delete_title),
                               None)
-            if full_event:
+            if full_event and full_event["title"] not in self.holidays.values():
                 self.events[event_date].remove(full_event)
                 self.save_events()
                 self.update_calendar()
@@ -331,7 +335,7 @@ class CalendarApp:
 
     def show_notifications(self, event_titles):
         message = "금일 다음과 같이 일정이 있습니다.\n" + "\n".join([f"{idx + 1}. {title}" for idx, title in enumerate(event_titles)])
-        self.notifier.show_toast("일정 알림", message, duration=10)
+        self.notifier.show_toast("오늘의 일정 알림", message, duration=10)
 
 
 if __name__ == "__main__":
