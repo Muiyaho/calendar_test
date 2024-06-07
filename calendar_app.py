@@ -1,7 +1,10 @@
 import tkinter as tk
+from tkinter import simpledialog, Menu, Toplevel, Label, Entry, Button, filedialog, messagebox
 import calendar
 from datetime import datetime, date
 import holidays
+import json
+import os
 
 class CalendarApp:
     def __init__(self, root):
@@ -9,10 +12,29 @@ class CalendarApp:
         self.today = datetime.today()
         self.year = self.today.year
         self.month = self.today.month
+        self.events = {}
+
+        self.data_file = "calendar_events.json"
+        self.load_events()
 
         self.root.title("캘린더 프로그램")
+        self.root.geometry("800x600")
+        self.create_menu()
         self.create_header()
         self.create_calendar()
+
+    def create_menu(self):
+        menubar = Menu(self.root)
+        self.root.config(menu=menubar)
+
+        file_menu = Menu(menubar, tearoff=0)
+        file_menu.add_command(label="일정 불러오기", command=self.load_events_dialog)
+        file_menu.add_command(label="일정 다른 이름으로 저장하기", command=self.save_events_as)
+        file_menu.add_command(label="일정 초기화", command=self.reset_events)
+        file_menu.add_separator()
+        file_menu.add_command(label="종료", command=self.root.quit)
+
+        menubar.add_cascade(label="파일", menu=file_menu)
 
     def create_header(self):
         header_frame = tk.Frame(self.root)
@@ -34,7 +56,7 @@ class CalendarApp:
 
         cal = calendar.Calendar()
         month_days = cal.monthdayscalendar(self.year, self.month)
-        korean_holidays = holidays.KR(years=self.year)
+        self.korean_holidays = holidays.KR(years=self.year)
 
         days_of_week = ["일", "월", "화", "수", "목", "금", "토"]
         for col, day in enumerate(days_of_week):
@@ -45,6 +67,10 @@ class CalendarApp:
             for col, day in enumerate(week):
                 if day == 0:
                     continue
+
+                current_date = date(self.year, self.month, day)
+                if current_date not in self.events:
+                    self.events[current_date] = []
 
                 frame = tk.Frame(self.root, borderwidth=1, relief="solid")
                 frame.grid(row=row+2, column=col, sticky="nsew")
@@ -59,26 +85,30 @@ class CalendarApp:
                     bg_color = "#ADD8E6"  # 토요일 배경색
                     fg_color = "red"  # 토요일 글자색
 
-                current_date = date(self.year, self.month, day)
-                if current_date in korean_holidays:
+                if current_date in self.korean_holidays:
                     fg_color = "red"  # 공휴일 글자색
+                    holiday_name = self.korean_holidays.get(current_date)
+                    if holiday_name not in self.events[current_date]:
+                        self.events[current_date].insert(0, holiday_name)
 
                 frame.configure(bg=bg_color)
                 day_label = tk.Label(frame, text=str(day), bg=bg_color, fg=fg_color)
                 day_label.pack(anchor="nw")
 
-                text_var = tk.StringVar()
-                entry = tk.Entry(frame, textvariable=text_var)
-                entry.pack(fill="both", expand=True)
+                event_list = tk.Listbox(frame)
+                event_list.pack(fill="both", expand=True)
+                event_list.bind("<Button-3>", lambda e, date=current_date, el=event_list: self.show_context_menu(e, date, el))
+
+                self.update_events(current_date, event_list)
 
         for col in range(7):
             self.root.grid_columnconfigure(col, weight=1)
-        for row in range(8):
+        for row in range(2, 8):  # Adjusted range to prevent the header row from being resized
             self.root.grid_rowconfigure(row, weight=1)
 
     def clear_calendar(self):
         for widget in self.root.grid_slaves():
-            if int(widget.grid_info()["row"]) > 0:
+            if int(widget.grid_info()["row"]) > 1:  # Ensure header row is not cleared
                 widget.grid_forget()
 
     def update_month_label(self):
@@ -101,6 +131,91 @@ class CalendarApp:
             self.month += 1
         self.update_month_label()
         self.create_calendar()
+
+    def show_context_menu(self, event, date, event_list):
+        context_menu = Menu(self.root, tearoff=0)
+        context_menu.add_command(label="일정 추가", command=lambda: self.open_add_event_popup(date))
+        if event_list.curselection():
+            context_menu.add_command(label="일정 삭제", command=lambda: self.delete_event(date, event_list))
+        context_menu.post(event.x_root, event.y_root)
+
+    def open_add_event_popup(self, event_date):
+        popup = Toplevel(self.root)
+        popup.title("일정 추가")
+
+        Label(popup, text="제목:").pack(pady=5)
+        title_entry = Entry(popup)
+        title_entry.pack(pady=5)
+
+        Label(popup, text="설명:").pack(pady=5)
+        description_entry = Entry(popup)
+        description_entry.pack(pady=5)
+
+        Button(popup, text="추가", command=lambda: self.add_event(event_date, title_entry.get(), description_entry.get(), popup)).pack(pady=20)
+
+    def add_event(self, event_date, title, description, popup):
+        if title:
+            self.events[event_date].append(title)
+            self.save_events()
+            self.update_calendar()
+            popup.destroy()
+
+    def delete_event(self, event_date, event_list):
+        selected_index = event_list.curselection()
+        if selected_index:
+            event_to_delete = event_list.get(selected_index)
+            self.events[event_date].remove(event_to_delete)
+            self.save_events()
+            self.update_calendar()
+
+    def update_events(self, event_date, event_list):
+        event_list.delete(0, tk.END)
+        for event in self.events.get(event_date, []):
+            event_list.insert(tk.END, event)
+
+    def update_calendar(self):
+        for row, week in enumerate(calendar.Calendar().monthdayscalendar(self.year, self.month)):
+            for col, day in enumerate(week):
+                if day == 0:
+                    continue
+
+                current_date = date(self.year, self.month, day)
+                for widget in self.root.grid_slaves():
+                    if int(widget.grid_info()["row"]) == row+2 and int(widget.grid_info()["column"]) == col:
+                        event_list = widget.winfo_children()[-1]
+                        self.update_events(current_date, event_list)
+
+    def save_events(self):
+        events_to_save = {str(k): v for k, v in self.events.items()}
+        with open(self.data_file, "w", encoding="utf-8") as f:
+            json.dump(events_to_save, f, ensure_ascii=False, indent=4)
+
+    def save_events_as(self):
+        file_path = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("JSON files", "*.json")])
+        if file_path:
+            events_to_save = {str(k): v for k, v in self.events.items()}
+            with open(file_path, "w", encoding="utf-8") as f:
+                json.dump(events_to_save, f, ensure_ascii=False, indent=4)
+
+    def load_events(self):
+        if os.path.exists(self.data_file):
+            with open(self.data_file, "r", encoding="utf-8") as f:
+                events_loaded = json.load(f)
+                self.events = {datetime.strptime(k, "%Y-%m-%d").date(): v for k, v in events_loaded.items()}
+
+    def load_events_dialog(self):
+        file_path = filedialog.askopenfilename(defaultextension=".json", filetypes=[("JSON files", "*.json")])
+        if file_path:
+            with open(file_path, "r", encoding="utf-8") as f:
+                events_loaded = json.load(f)
+                self.events = {datetime.strptime(k, "%Y-%m-%d").date(): v for k, v in events_loaded.items()}
+            self.update_calendar()
+
+    def reset_events(self):
+        if messagebox.askyesno("초기화 확인", "정말로 모든 일정을 초기화하시겠습니까?"):
+            self.events = {}
+            self.save_events()
+            self.update_calendar()
 
 if __name__ == "__main__":
     root = tk.Tk()
