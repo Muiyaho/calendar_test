@@ -47,6 +47,9 @@ class CalendarApp:
         self.next_button = tk.Button(header_frame, text=">", command=self.next_month)
         self.next_button.pack(side="right")
 
+        self.today_button = tk.Button(header_frame, text="오늘", command=self.go_to_today)
+        self.today_button.pack(side="left")
+
         self.month_label = tk.Label(header_frame, text="", font=("Helvetica", 16))
         self.month_label.pack(side="left", fill="x", expand=True)
 
@@ -55,7 +58,7 @@ class CalendarApp:
     def create_calendar(self):
         self.clear_calendar()
 
-        cal = calendar.Calendar()
+        cal = calendar.Calendar(firstweekday=6)  # Sunday is considered as the first day of the week
         month_days = cal.monthdayscalendar(self.year, self.month)
         self.korean_holidays = holidays.KR(years=self.year)
 
@@ -74,9 +77,13 @@ class CalendarApp:
                     self.events[current_date] = []
 
                 frame = tk.Frame(self.root, borderwidth=1, relief="solid")
-                frame.grid(row=row+2, column=col, sticky="nsew")
+                frame.grid(row=row + 2, column=col, sticky="nsew")
 
-                bg_color = "#FFFFFF"  # 기본 배경색
+                if current_date == self.today.date():
+                    bg_color = "#FFD700"  # 오늘 날짜 배경색
+                else:
+                    bg_color = "#FFFFFF"  # 기본 배경색
+
                 fg_color = "black"  # 기본 글자색
 
                 if col == 0:
@@ -136,6 +143,12 @@ class CalendarApp:
         self.update_month_label()
         self.create_calendar()
 
+    def go_to_today(self):
+        self.year = self.today.year
+        self.month = self.today.month
+        self.update_month_label()
+        self.create_calendar()
+
     def show_context_menu(self, event, date, event_list):
         context_menu = Menu(self.root, tearoff=0)
         context_menu.add_command(label="일정 추가", command=lambda: self.open_add_event_popup(date))
@@ -156,7 +169,11 @@ class CalendarApp:
         Label(popup, text="설명:").pack(pady=5)
         description_entry = Text(popup, width=40, height=5)
         description_entry.pack(pady=5)
-        description_entry.insert("1.0", event.split(": ")[1] if event else "")
+
+        if event and len(event.split(": ")) > 1:
+            description_entry.insert("1.0", event.split(": ")[1])
+        else:
+            description_entry.insert("1.0", "")
 
         if event:
             title_entry.config(state="disabled")
@@ -192,14 +209,17 @@ class CalendarApp:
             event_list.insert(tk.END, event)
 
     def update_calendar(self):
-        for row, week in enumerate(calendar.Calendar().monthdayscalendar(self.year, self.month)):
+        cal = calendar.Calendar(firstweekday=6)
+        month_days = cal.monthdayscalendar(self.year, self.month)
+
+        for row, week in enumerate(month_days):
             for col, day in enumerate(week):
                 if day == 0:
                     continue
 
                 current_date = date(self.year, self.month, day)
                 for widget in self.root.grid_slaves():
-                    if int(widget.grid_info()["row"]) == row+2 and int(widget.grid_info()["column"]) == col:
+                    if int(widget.grid_info()["row"]) == row + 2 and int(widget.grid_info()["column"]) == col:
                         event_list = widget.winfo_children()[-1]
                         self.update_events(current_date, event_list)
 
