@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import simpledialog, Menu, Toplevel, Label, Entry, Button, filedialog, messagebox
+from tkinter import simpledialog, Menu, Toplevel, Label, Entry, Button, Text, filedialog, messagebox
 import calendar
 from datetime import datetime, date
 import holidays
@@ -13,6 +13,7 @@ class CalendarApp:
         self.year = self.today.year
         self.month = self.today.month
         self.events = {}
+        self.holidays = {}
 
         self.data_file = "calendar_events.json"
         self.load_events()
@@ -88,6 +89,8 @@ class CalendarApp:
                 if current_date in self.korean_holidays:
                     fg_color = "red"  # 공휴일 글자색
                     holiday_name = self.korean_holidays.get(current_date)
+                    if current_date not in self.holidays:
+                        self.holidays[current_date] = holiday_name
                     if holiday_name not in self.events[current_date]:
                         self.events[current_date].insert(0, holiday_name)
 
@@ -98,6 +101,7 @@ class CalendarApp:
                 event_list = tk.Listbox(frame)
                 event_list.pack(fill="both", expand=True)
                 event_list.bind("<Button-3>", lambda e, date=current_date, el=event_list: self.show_context_menu(e, date, el))
+                event_list.bind("<Double-Button-1>", lambda e, date=current_date, el=event_list: self.show_event_detail(e, date, el))
 
                 self.update_events(current_date, event_list)
 
@@ -135,23 +139,30 @@ class CalendarApp:
     def show_context_menu(self, event, date, event_list):
         context_menu = Menu(self.root, tearoff=0)
         context_menu.add_command(label="일정 추가", command=lambda: self.open_add_event_popup(date))
-        if event_list.curselection():
+        if event_list.curselection() and event_list.get(event_list.curselection()) not in self.holidays.values():
             context_menu.add_command(label="일정 삭제", command=lambda: self.delete_event(date, event_list))
         context_menu.post(event.x_root, event.y_root)
 
-    def open_add_event_popup(self, event_date):
+    def open_add_event_popup(self, event_date, event=None):
         popup = Toplevel(self.root)
-        popup.title("일정 추가")
+        popup.title("일정 추가" if event is None else "일정 보기")
+        popup.geometry("320x240")
 
         Label(popup, text="제목:").pack(pady=5)
-        title_entry = Entry(popup)
+        title_entry = Entry(popup, width=40)
         title_entry.pack(pady=5)
+        title_entry.insert(0, event.split(": ")[0] if event else "")
 
         Label(popup, text="설명:").pack(pady=5)
-        description_entry = Entry(popup)
+        description_entry = Text(popup, width=40, height=5)
         description_entry.pack(pady=5)
+        description_entry.insert("1.0", event.split(": ")[1] if event else "")
 
-        Button(popup, text="추가", command=lambda: self.add_event(event_date, title_entry.get(), description_entry.get(), popup)).pack(pady=20)
+        if event:
+            title_entry.config(state="disabled")
+            description_entry.config(state="disabled")
+        else:
+            Button(popup, text="추가", command=lambda: self.add_event(event_date, title_entry.get(), description_entry.get("1.0", tk.END), popup)).pack(pady=20)
 
     def add_event(self, event_date, title, description, popup):
         if title:
@@ -164,9 +175,16 @@ class CalendarApp:
         selected_index = event_list.curselection()
         if selected_index:
             event_to_delete = event_list.get(selected_index)
-            self.events[event_date].remove(event_to_delete)
-            self.save_events()
-            self.update_calendar()
+            if event_to_delete not in self.holidays.values():
+                self.events[event_date].remove(event_to_delete)
+                self.save_events()
+                self.update_calendar()
+
+    def show_event_detail(self, event, event_date, event_list):
+        selected_index = event_list.curselection()
+        if selected_index:
+            event_detail = event_list.get(selected_index)
+            self.open_add_event_popup(event_date, event_detail)
 
     def update_events(self, event_date, event_list):
         event_list.delete(0, tk.END)
@@ -187,33 +205,43 @@ class CalendarApp:
 
     def save_events(self):
         events_to_save = {str(k): v for k, v in self.events.items()}
+        holidays_to_save = {str(k): v for k, v in self.holidays.items()}
+        data = {"events": events_to_save, "holidays": holidays_to_save}
         with open(self.data_file, "w", encoding="utf-8") as f:
-            json.dump(events_to_save, f, ensure_ascii=False, indent=4)
+            json.dump(data, f, ensure_ascii=False, indent=4)
 
     def save_events_as(self):
         file_path = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("JSON files", "*.json")])
         if file_path:
             events_to_save = {str(k): v for k, v in self.events.items()}
+            holidays_to_save = {str(k): v for k, v in self.holidays.items()}
+            data = {"events": events_to_save, "holidays": holidays_to_save}
             with open(file_path, "w", encoding="utf-8") as f:
-                json.dump(events_to_save, f, ensure_ascii=False, indent=4)
+                json.dump(data, f, ensure_ascii=False, indent=4)
 
     def load_events(self):
         if os.path.exists(self.data_file):
             with open(self.data_file, "r", encoding="utf-8") as f:
-                events_loaded = json.load(f)
+                data = json.load(f)
+                events_loaded = data.get("events", {})
+                holidays_loaded = data.get("holidays", {})
                 self.events = {datetime.strptime(k, "%Y-%m-%d").date(): v for k, v in events_loaded.items()}
+                self.holidays = {datetime.strptime(k, "%Y-%m-%d").date(): v for k, v in holidays_loaded.items()}
 
     def load_events_dialog(self):
         file_path = filedialog.askopenfilename(defaultextension=".json", filetypes=[("JSON files", "*.json")])
         if file_path:
             with open(file_path, "r", encoding="utf-8") as f:
-                events_loaded = json.load(f)
+                data = json.load(f)
+                events_loaded = data.get("events", {})
+                holidays_loaded = data.get("holidays", {})
                 self.events = {datetime.strptime(k, "%Y-%m-%d").date(): v for k, v in events_loaded.items()}
+                self.holidays = {datetime.strptime(k, "%Y-%m-%d").date(): v for k, v in holidays_loaded.items()}
             self.update_calendar()
 
     def reset_events(self):
         if messagebox.askyesno("초기화 확인", "정말로 모든 일정을 초기화하시겠습니까?"):
-            self.events = {}
+            self.events = {k: [v] for k, v in self.holidays.items()}
             self.save_events()
             self.update_calendar()
 
