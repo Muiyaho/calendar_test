@@ -24,7 +24,7 @@ class CalendarApp:
         self.data_file = "calendar_events.json"
         self.load_events()
 
-        self.root.title("캘린더")
+        self.root.title("캘린더 프로그램")
         self.root.geometry("800x600")
         self.create_menu()
         self.create_header()
@@ -335,7 +335,7 @@ class CalendarApp:
 
     def show_notifications(self, event_titles):
         message = "금일 다음과 같이 일정이 있습니다.\n" + "\n".join([f"{idx + 1}. {title}" for idx, title in enumerate(event_titles)])
-        self.notifier.show_toast("오늘의 일정 알림", message, duration=10)
+        self.notifier.show_toast("일정 알림", message, duration=10)
 
 
 if __name__ == "__main__":
