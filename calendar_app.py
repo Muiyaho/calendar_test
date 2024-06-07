@@ -1,10 +1,15 @@
 import tkinter as tk
-from tkinter import simpledialog, Menu, Toplevel, Label, Entry, Button, Text, filedialog, messagebox
+from tkinter import simpledialog, Menu, Toplevel, Label, Entry, Button, Text, Checkbutton, BooleanVar, filedialog, \
+    messagebox
 import calendar
 from datetime import datetime, date
 import holidays
 import json
 import os
+import threading
+import time as time_module
+from win10toast import ToastNotifier
+
 
 class CalendarApp:
     def __init__(self, root):
@@ -14,6 +19,7 @@ class CalendarApp:
         self.month = self.today.month
         self.events = {}
         self.holidays = {}
+        self.notifier = ToastNotifier()
 
         self.data_file = "calendar_events.json"
         self.load_events()
@@ -23,6 +29,10 @@ class CalendarApp:
         self.create_menu()
         self.create_header()
         self.create_calendar()
+
+        # 알림 스레드 시작
+        self.alarm_thread = threading.Thread(target=self.check_alarms, daemon=True)
+        self.alarm_thread.start()
 
     def create_menu(self):
         menubar = Menu(self.root)
@@ -47,11 +57,11 @@ class CalendarApp:
         self.next_button = tk.Button(header_frame, text=">", command=self.next_month)
         self.next_button.pack(side="right")
 
-        self.today_button = tk.Button(header_frame, text="오늘", command=self.go_to_today)
-        self.today_button.pack(side="left")
-
         self.month_label = tk.Label(header_frame, text="", font=("Helvetica", 16))
         self.month_label.pack(side="left", fill="x", expand=True)
+
+        self.today_button = tk.Button(header_frame, text="오늘", command=self.go_to_today)
+        self.today_button.pack(side="left")
 
         self.update_month_label()
 
@@ -98,8 +108,9 @@ class CalendarApp:
                     holiday_name = self.korean_holidays.get(current_date)
                     if current_date not in self.holidays:
                         self.holidays[current_date] = holiday_name
-                    if holiday_name not in self.events[current_date]:
-                        self.events[current_date].insert(0, holiday_name)
+                    if not any(event.get("title") == holiday_name for event in self.events[current_date]):
+                        self.events[current_date].insert(0, {"title": holiday_name, "description": "", "alarm": False,
+                                                             "debug": False})
 
                 frame.configure(bg=bg_color)
                 day_label = tk.Label(frame, text=str(day), bg=bg_color, fg=fg_color)
@@ -107,8 +118,10 @@ class CalendarApp:
 
                 event_list = tk.Listbox(frame)
                 event_list.pack(fill="both", expand=True)
-                event_list.bind("<Button-3>", lambda e, date=current_date, el=event_list: self.show_context_menu(e, date, el))
-                event_list.bind("<Double-Button-1>", lambda e, date=current_date, el=event_list: self.show_event_detail(e, date, el))
+                event_list.bind("<Button-3>",
+                                lambda e, date=current_date, el=event_list: self.show_context_menu(e, date, el))
+                event_list.bind("<Double-Button-1>",
+                                lambda e, date=current_date, el=event_list: self.show_event_detail(e, date, el))
 
                 self.update_events(current_date, event_list)
 
@@ -152,38 +165,65 @@ class CalendarApp:
     def show_context_menu(self, event, date, event_list):
         context_menu = Menu(self.root, tearoff=0)
         context_menu.add_command(label="일정 추가", command=lambda: self.open_add_event_popup(date))
-        if event_list.curselection() and event_list.get(event_list.curselection()) not in self.holidays.values():
+        if event_list.curselection() and event_list.get(event_list.curselection()):
             context_menu.add_command(label="일정 삭제", command=lambda: self.delete_event(date, event_list))
         context_menu.post(event.x_root, event.y_root)
 
     def open_add_event_popup(self, event_date, event=None):
         popup = Toplevel(self.root)
         popup.title("일정 추가" if event is None else "일정 보기")
-        popup.geometry("320x240")
+        popup.geometry("380x250")
+        popup.grid_rowconfigure(0, weight=1)
+        popup.grid_columnconfigure(0, weight=1)
 
-        Label(popup, text="제목:").pack(pady=5)
+        Label(popup, text="제목:").grid(row=0, column=0, pady=5, sticky="w")
         title_entry = Entry(popup, width=40)
-        title_entry.pack(pady=5)
-        title_entry.insert(0, event.split(": ")[0] if event else "")
+        title_entry.grid(row=0, column=1, pady=5, padx=5)
+        title_entry.insert(0, event["title"] if event else "")
 
-        Label(popup, text="설명:").pack(pady=5)
+        Label(popup, text="설명:").grid(row=1, column=0, pady=5, sticky="nw")
         description_entry = Text(popup, width=40, height=5)
-        description_entry.pack(pady=5)
+        description_entry.grid(row=1, column=1, pady=5, padx=5)
+        description_entry.insert("1.0", event["description"] if event else "")
 
-        if event and len(event.split(": ")) > 1:
-            description_entry.insert("1.0", event.split(": ")[1])
-        else:
-            description_entry.insert("1.0", "")
+        alarm_var = BooleanVar()
+        debug_var = BooleanVar()
 
         if event:
-            title_entry.config(state="disabled")
-            description_entry.config(state="disabled")
-        else:
-            Button(popup, text="추가", command=lambda: self.add_event(event_date, title_entry.get(), description_entry.get("1.0", tk.END), popup)).pack(pady=20)
+            alarm_var.set(event["alarm"])
+            debug_var.set(event["debug"])
 
-    def add_event(self, event_date, title, description, popup):
+        alarm_check = Checkbutton(popup, text="알림 설정", variable=alarm_var)
+        alarm_check.grid(row=2, column=0, pady=5, padx=5, sticky="w")
+
+        debug_check = Checkbutton(popup, text="디버그", variable=debug_var)
+        debug_check.grid(row=2, column=1, pady=5, padx=5, sticky="w")
+
+        if event:
+            Button(popup, text="수정", command=lambda: self.update_event(event_date, title_entry.get(),
+                                                                       description_entry.get("1.0", tk.END),
+                                                                       alarm_var.get(), debug_var.get(), event,
+                                                                       popup)).grid(row=3, column=0, columnspan=2,
+                                                                                    pady=20)
+        else:
+            Button(popup, text="추가",
+                   command=lambda: self.add_event(event_date, title_entry.get(), description_entry.get("1.0", tk.END),
+                                                  alarm_var.get(), debug_var.get(), popup)).grid(row=3, column=0,
+                                                                                                 columnspan=2, pady=20)
+
+    def add_event(self, event_date, title, description, alarm, debug, popup):
         if title:
-            self.events[event_date].append(title)
+            event_data = {"title": title, "description": description.strip(), "alarm": alarm, "debug": debug}
+            self.events[event_date].append(event_data)
+            self.save_events()
+            self.update_calendar()
+            popup.destroy()
+
+    def update_event(self, event_date, title, description, alarm, debug, old_event, popup):
+        if title:
+            event_data = {"title": title, "description": description.strip(), "alarm": alarm, "debug": debug}
+            self.events[event_date].remove(old_event)
+            self.events[event_date].append(event_data)
             self.save_events()
             self.update_calendar()
             popup.destroy()
@@ -191,9 +231,11 @@ class CalendarApp:
     def delete_event(self, event_date, event_list):
         selected_index = event_list.curselection()
         if selected_index:
-            event_to_delete = event_list.get(selected_index)
-            if event_to_delete not in self.holidays.values():
-                self.events[event_date].remove(event_to_delete)
+            event_to_delete_title = event_list.get(selected_index)
+            full_event = next((event for event in self.events[event_date] if event["title"] == event_to_delete_title),
+                              None)
+            if full_event:
+                self.events[event_date].remove(full_event)
                 self.save_events()
                 self.update_calendar()
 
@@ -201,12 +243,13 @@ class CalendarApp:
         selected_index = event_list.curselection()
         if selected_index:
             event_detail = event_list.get(selected_index)
-            self.open_add_event_popup(event_date, event_detail)
+            full_event = next((ev for ev in self.events[event_date] if ev["title"] == event_detail), {})
+            self.open_add_event_popup(event_date, full_event)
 
     def update_events(self, event_date, event_list):
         event_list.delete(0, tk.END)
         for event in self.events.get(event_date, []):
-            event_list.insert(tk.END, event)
+            event_list.insert(tk.END, event["title"])  # 제목만 표시
 
     def update_calendar(self):
         cal = calendar.Calendar(firstweekday=6)
@@ -245,7 +288,9 @@ class CalendarApp:
                 data = json.load(f)
                 events_loaded = data.get("events", {})
                 holidays_loaded = data.get("holidays", {})
-                self.events = {datetime.strptime(k, "%Y-%m-%d").date(): v for k, v in events_loaded.items()}
+                self.events = {datetime.strptime(k, "%Y-%m-%d").date(): [
+                    v if isinstance(v, dict) else {"title": v, "description": "", "alarm": False, "debug": False} for v
+                    in v_list] for k, v_list in events_loaded.items()}
                 self.holidays = {datetime.strptime(k, "%Y-%m-%d").date(): v for k, v in holidays_loaded.items()}
 
     def load_events_dialog(self):
@@ -255,15 +300,39 @@ class CalendarApp:
                 data = json.load(f)
                 events_loaded = data.get("events", {})
                 holidays_loaded = data.get("holidays", {})
-                self.events = {datetime.strptime(k, "%Y-%m-%d").date(): v for k, v in events_loaded.items()}
+                self.events = {datetime.strptime(k, "%Y-%m-%d").date(): [
+                    v if isinstance(v, dict) else {"title": v, "description": "", "alarm": False, "debug": False} for v
+                    in v_list] for k, v_list in events_loaded.items()}
                 self.holidays = {datetime.strptime(k, "%Y-%m-%d").date(): v for k, v in holidays_loaded.items()}
             self.update_calendar()
 
     def reset_events(self):
         if messagebox.askyesno("초기화 확인", "정말로 모든 일정을 초기화하시겠습니까?"):
-            self.events = {k: [v] for k, v in self.holidays.items()}
+            self.events = {k: [{"title": v, "description": "", "alarm": False, "debug": False}] for k, v in
+                           self.holidays.items()}
             self.save_events()
             self.update_calendar()
+
+    def check_alarms(self):
+        while True:
+            now = datetime.now()
+            current_time = now.time()
+            for event_date, events in self.events.items():
+                if event_date == now.date():
+                    event_titles = [event['title'] for event in events if event["alarm"]]
+                    if event_titles:
+                        if any(event["debug"] for event in events):
+                            if current_time.minute % 1 == 0:  # 1분마다 알림
+                                self.show_notifications(event_titles)
+                        else:
+                            if current_time.hour in [9, 13, 17, 18] and current_time.minute == 0:
+                                self.show_notifications(event_titles)
+            time_module.sleep(60)  # 1분마다 확인
+
+    def show_notifications(self, event_titles):
+        message = "금일 다음과 같이 일정이 있습니다.\n" + "\n".join([f"{idx + 1}. {title}" for idx, title in enumerate(event_titles)])
+        self.notifier.show_toast("일정 알림", message, duration=10)
+
 
 if __name__ == "__main__":
     root = tk.Tk()
